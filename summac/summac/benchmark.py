@@ -94,18 +94,16 @@ class SummaCBenchmark:
             with open(os.path.join(dataset_folder, fn), "r") as f:
                 dataset = json.load(f)
 
-            path_cnndm = os.path.join(self.benchmark_folder, "cnndm")
-
             if "_org" in fn or fn == "test_chen18_reranked.json":
                 for aid in dataset:
-                    document = self.get_cnndm_document(aid, path_cnndm)
+                    document = self.get_cnndm_document(aid)
                     label = 0 if dataset[aid]["label"] == "Incorrect" else 1
                     sents = dataset[aid]["sents"]
                     summary = " ".join([sents[str(i)]["text"] for i in range(len(sents))])
                     clean_dataset.append({"filename": fn, "label": label, "document": document, "claim": summary, "cnndm_id": aid, "annotations": [label], "dataset": "cogensumm", "origin": "cnndm"})
             elif fn == "val_reranking.json":
                 for aid in dataset:
-                    document = self.get_cnndm_document(aid, path_cnndm)
+                    document = self.get_cnndm_document(aid)
                     for idx, data in dataset[aid].items():
                         label = 0 if data["label"] == "Incorrect" else 1
                         summary = " ".join([data["sents"][str(i)]["text"] for i in range(len(data["sents"]))])
@@ -113,7 +111,7 @@ class SummaCBenchmark:
             elif fn == "val_sentence_pairs.json":
                 for d in dataset:
                     aid = d["article_id"]
-                    document = self.get_cnndm_document(aid, path_cnndm)
+                    document = self.get_cnndm_document(aid)
                     clean_dataset.append({"filename": fn, "label": 1, "document": document, "claim": d["correct_sent"], "cnndm_id": aid, "annotations": [1], "dataset": "cogensumm", "origin": "cnndm"})
                     clean_dataset.append({"filename": fn, "label": 0, "document": document, "claim": d["incorrect_sent"], "cnndm_id": aid, "annotations": [0], "dataset": "cogensumm", "origin": "cnndm"})
         self.datasets.append({"name": "cogensumm", "dataset": clean_dataset})
