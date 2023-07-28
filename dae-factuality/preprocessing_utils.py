@@ -25,10 +25,10 @@ def read_next(file):
 
 
 def get_tokens(input_text):
-    tokenized_json = nlp.annotate(input_text, properties={'annotators': 'tokenize', 'outputFormat': 'json',
-                                                          'ssplit.isOneSentence': True})
+    tokenized_json = eval(nlp.annotate(input_text, properties={'annotators': 'tokenize', 'outputFormat': 'json',
+                                                          'ssplit.isOneSentence': True}))
     tokenized_text = []
-    for tok in tokenized_json['tokens']:
+    for tok in tokenized_json['sentences'][0]['tokens']:
         tokenized_text.append(tok['word'])
     tokenized_text = ' '.join(tokenized_text)
     return tokenized_text
@@ -36,8 +36,8 @@ def get_tokens(input_text):
 
 def get_relevant_deps_and_context(line, args):
     dep_type = args.dependency_type
-    parse = nlp.annotate(line, properties={'annotators': 'tokenize,ssplit,pos,depparse', 'outputFormat': 'json',
-                                           'ssplit.isOneSentence': True})
+    parse = eval(nlp.annotate(line, properties={'annotators': 'tokenize,ssplit,pos,depparse', 'outputFormat': 'json',
+                                           'ssplit.isOneSentence': True}))
     deps = []
 
     tokens = parse['sentences'][0]['tokens']
