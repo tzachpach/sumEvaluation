@@ -15,7 +15,7 @@ def train(model="mnli", granularity="sentence", nli_labels="e", pre_file="", num
         print("Experiment name: %s" % (experiment))
 
     if len(pre_file) == 0:
-        standard_pre_file = "/home/phillab/data/summac_cache/train_%s_%s.jsonl" % (model, granularity)
+        standard_pre_file = "summac_cache/train_%s_%s.jsonl" % (model, granularity)
         if os.path.isfile(standard_pre_file):
             pre_file = standard_pre_file
 
@@ -110,7 +110,7 @@ def train(model="mnli", granularity="sentence", nli_labels="e", pre_file="", num
                     best_val_score = val_score
                     if len(best_file) > 0:
                         os.remove(best_file)
-                    best_file = "/home/phillab/models/summac/%s_bacc%.3f.bin" % (experiment, best_val_score)
+                    best_file = "models/summac/%s_bacc%.3f.bin" % (experiment, best_val_score)
                     torch.save(model.state_dict(), best_file)
                     if not silent:
                         for t in benchmark["benchmark"]:

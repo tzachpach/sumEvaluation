@@ -8,7 +8,7 @@ class BaselineScorer:
         self.do_weighter = do_weighter
         self.model_loaded = False
         self.cache = {}
-        self.cache_file = "/export/share/plaban/summac_cache/cache_%s.json" % (self.model)
+        self.cache_file = "summac_cache/cache_%s.json" % (self.model)
         if load_cache:
             self.load_cache()
 
@@ -27,6 +27,7 @@ class BaselineScorer:
             from evaluate_factuality import MODEL_CLASSES, score_example_single_context
 
             parser = argparse.ArgumentParser()
+            parser.add_argument("-f")
             args = parser.parse_args()
             args.device = "cuda:0"
             args.per_gpu_eval_batch_size = 8
@@ -34,7 +35,7 @@ class BaselineScorer:
             args.dependency_type =  "enhancedDependencies"
             self.args = args
 
-            model_dir = "/home/phillab/models/dae_basic/"
+            model_dir = "models/dae_basic/"
             model_type = "electra_dae"
             config_class, model_class, tokenizer_class = MODEL_CLASSES[model_type]
 
