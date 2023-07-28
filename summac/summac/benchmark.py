@@ -1,5 +1,5 @@
 import json, os, pandas as pd, numpy as np, csv
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from collections import Counter
 import requests, zipfile, tarfile
 
@@ -43,7 +43,11 @@ class SummaCBenchmark:
     # Underlying dataset loader: CNN/DM and XSum
     def get_cnndm_document(self, aid):
         if self.cnndm is None:
-            self.cnndm = load_dataset("cnn_dailymail", "3.0.0", download_mode="force_redownload")
+            if os.path.exists("data/summac_benchmark/cnndm.hf"):
+                self.cnndm = load_from_disk("data/summac_benchmark/cnndm.hf")
+            else:
+                self.cnndm = load_dataset("cnn_dailymail", "3.0.0", download_mode="force_redownload")
+                self.cnndm.save_to_disk("data/summac_benchmark/cnndm.hf")
             self.cnndm_id2article = {}
             for cut in ["test", "validation"]:
                 self.cnndm_id2article.update({d["id"]: d["article"] for d in self.cnndm[cut]})
@@ -52,7 +56,11 @@ class SummaCBenchmark:
     # def get_cnndm_reference(self, aid):
     #     global CNNDM
     #     if CNNDM is None:
-    #         CNNDM = load_dataset("cnn_dailymail", "3.0.0")
+    #         if os.path.exists("data/summac_benchmark/CNNDM.hf"):
+    #           CNNDM = load_from_disk("data/summac_benchmark/CNNDM.hf"", "3.0.0")
+    #         else:
+    #           CNNDM = load_dataset("cnn_dailymail", "3.0.0")
+    #           self.CNNDM.save_to_disk("CNNDM.hf")
     #         self.cnndm = CNNDM
     #     if self.cnndm_id2reference is None:
     #         self.cnndm_id2reference = {}
@@ -63,7 +71,12 @@ class SummaCBenchmark:
 
     def get_xsum_document(self, aid):
         if self.xsum is None:
-            self.xsum = load_dataset("xsum")["test"]
+            if os.path.exists("data/summac_benchmark/xsum.hf"):
+                self.xsum = load_from_disk("data/summac_benchmark/xsum.hf")["test"]
+            else:
+                self.xsum = load_dataset("xsum")
+                self.xsum.save_to_disk("data/summac_benchmark/xsum.hf")
+                self.xsum = self.xsum["test"]
             self.xsumid2article = {d["id"]: d["document"] for d in self.xsum}
 
         return self.xsumid2article[aid]
