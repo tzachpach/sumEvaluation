@@ -23,7 +23,7 @@ class BaselineScorer:
             from feqa import FEQA
             self.scorer = FEQA(use_gpu=True)
         elif self.model == "dae":
-            sys.path.insert(0, "/home/phillab/dae-factuality/")
+            sys.path.insert(0, "../../dae-factuality/")
             from evaluate_factuality import MODEL_CLASSES, score_example_single_context
 
             parser = argparse.ArgumentParser()

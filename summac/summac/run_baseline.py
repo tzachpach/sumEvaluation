@@ -36,7 +36,7 @@ def from_score_to_pred(dataset, score_key):
 		d[pred_key] = 1 if d[score_key] > thresh else 0
 
 
-summc_benchmark = SummaCBenchmark(benchmark_folder="D:/msc_work/sumVeracity/summac/summac/data/summac_benchmark/",cut=cut)
+summc_benchmark = SummaCBenchmark(benchmark_folder="data/summac_benchmark/", cut=cut)
 
 datasets = [{"name": "factcc", "dataset": summc_benchmark.load_factcc()},
 			{"name": "frank", "dataset": summc_benchmark.load_frank()},
@@ -123,5 +123,5 @@ df = df.rename(columns={k: k.replace("_bacc", "") for k in df.keys()})
 df.drop("total", inplace=True)
 
 print(df)
-df.to_csv("/home/phillab/%s_results.csv" % (model))
+df.to_csv("../%s_results.csv" % (model))
 # print(df.style.apply(highlight_max).background_gradient(cmap=cm, high=1.0, low=0.0).set_precision(3).set_caption("Weighed Accuracy"))

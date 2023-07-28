@@ -41,9 +41,8 @@ class SummaCBenchmark:
                 # raise ValueError("Unrecognized dataset name: %s" % (dataset_name))
 
     # Underlying dataset loader: CNN/DM and XSum
-    def get_cnndm_document(self, aid, path):
+    def get_cnndm_document(self, aid):
         if self.cnndm is None:
-            os.environ["HF_DATASETS_CACHE"] = path
             self.cnndm = load_dataset("cnn_dailymail", "3.0.0", download_mode="force_redownload")
             self.cnndm_id2article = {}
             for cut in ["test", "validation"]:
@@ -62,10 +61,8 @@ class SummaCBenchmark:
     #     return self.cnndm_id2reference[aid]
 
 
-    def get_xsum_document(self, aid, path):
+    def get_xsum_document(self, aid):
         if self.xsum is None:
-
-            os.environ["HF_DATASETS_CACHE"] = path
             self.xsum = load_dataset("xsum")["test"]
             self.xsumid2article = {d["id"]: d["document"] for d in self.xsum}
 
@@ -150,11 +147,10 @@ class SummaCBenchmark:
             if k not in groups:
                 groups[k] = []
             groups[k].append(d)
-        xsum_path = os.path.join(self.benchmark_folder, "xsum")
         clean_dataset = []
         for k, vs in groups.items():
             A = vs[0]
-            document = self.get_xsum_document(A["bbcid"], xsum_path)
+            document = self.get_xsum_document(A["bbcid"])
             labels = [v["hallucination_type"] for v in vs]
             annotations = [1 if label == "NULL" else 0 for label in labels]
             most_common_label = Counter(labels).most_common(1)[0][0]
@@ -385,9 +381,9 @@ class SummaCBenchmark:
 
 if __name__ == "__main__":
     import random
-    path = r'C:\Users\User\PycharmProjects\IDC\NLP\summac\summac\data'
+    path = r'./data'
     for cut in ["val", "test"]:
-        summac_benchmark = SummaCBenchmark(benchmark_folder=path ,cut=cut)
+        summac_benchmark = SummaCBenchmark(benchmark_folder=path, cut=cut)
         print("============= SUMMAC %s ===============" % (cut.upper()))
         summac_benchmark.print_stats()
         for dataset in summac_benchmark.datasets:
