@@ -1,6 +1,6 @@
 import sklearn
 import torch, time, numpy as np
-from IDC.NLP.summac.summac.utils_misc import batcher
+from summac.utils_misc import batcher
 
 class ScorerWrapper:
     def __init__(self, scorers, scoring_method="logsum", max_batch_size=100, use_caching=False):

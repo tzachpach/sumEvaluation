@@ -1,7 +1,7 @@
 from sentence_transformers import SentenceTransformer, util
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import nltk, numpy as np, torch, os, json
-from IDC.NLP.summac.summac.utils_misc import batcher
+from summac.utils_misc import batcher
 nltk.download('punkt')
 
 model_map = {

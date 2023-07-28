@@ -3,10 +3,12 @@ from datasets import load_dataset
 from collections import Counter
 import requests, zipfile, tarfile
 
-from IDC.NLP.summac.summac.utils_scoring import ScorerWrapper, choose_best_threshold
-from IDC.NLP.summac.summac.utils_misc import download_file_from_google_drive
+from utils_scoring import ScorerWrapper, choose_best_threshold
+from utils_misc import download_file_from_google_drive
 
 # SummaC Benchmark
+
+
 class SummaCBenchmark:
 
     def __init__(self, benchmark_folder, dataset_names=["xsumfaith", "polytope", "factcc", "summeval", "frank"], cut="val"):
