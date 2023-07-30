@@ -118,12 +118,15 @@ class SummaCImager:
         dataset, N_ori, N_gen = self.build_chunk_dataset(original, generated)
         
         if len(dataset) == 0:
-            return np.zeros((3, 1, 1))
+            return np.zeros((5, 1, 1))
 
-        image = np.zeros((3, N_ori, N_gen))
+        image = np.zeros((5, N_ori, N_gen))
 
         if self.model is None:
             self.load_nli()
+
+        sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cuda:1')
+        blanc_model = BlancHelp(device='cuda:1', inference_batch_size=128)
 
         for batch in batcher(dataset, batch_size=20):
             batch_prems = [b["premise"] for b in batch]
@@ -132,15 +135,29 @@ class SummaCImager:
             with torch.no_grad():
                 model_outputs = self.model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
 
+            # get Sentence-BERT embeddings for sentence pairs
+            embeddings1 = sts_model.encode(batch_prems, convert_to_tensor=True)
+            embeddings2 = sts_model.encode(batch_hypos, convert_to_tensor=True)
+
+            # # Compute cosine-similarities
+            cosine_scores = util.cos_sim(embeddings1, embeddings2)
+
             batch_probs = torch.nn.functional.softmax(model_outputs["logits"], dim=-1)
             batch_evids = batch_probs[:, self.entailment_idx].tolist()
             batch_conts = batch_probs[:, self.contradiction_idx].tolist()
             batch_neuts = batch_probs[:, self.neutral_idx].tolist()
+            batch_sts_score = cosine_scores.tolist()[0]
+            batch_blanc_score = blanc_model.eval_pairs(batch_prems, batch_hypos)
 
-            for b, evid, cont, neut in zip(batch, batch_evids, batch_conts, batch_neuts):
+            for b, evid, cont, neut, sts, blnc in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score,
+                                                      batch_blanc_score):
+                # for b, evid, cont, neut, sts in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score):
+                # for b, evid, cont, neut in zip(batch, batch_evids, batch_conts, batch_neuts):
                 image[0, b["doc_i"], b["gen_i"]] = evid
                 image[1, b["doc_i"], b["gen_i"]] = cont
                 image[2, b["doc_i"], b["gen_i"]] = neut
+                image[3, b["doc_i"], b["gen_i"]] = sts
+                image[4, b["doc_i"], b["gen_i"]] = blnc
 
         if self.use_cache:
             self.cache[cache_key] = image
@@ -179,14 +196,11 @@ class SummaCImager:
 
 
             # get Sentence-BERT embeddings for sentence pairs
-            # batch_embeddings = self.model.encode(batch_prems, batch_hypos, convert_to_tensor=True, show_progress_bar=False)
             embeddings1 = sts_model.encode(batch_prems, convert_to_tensor=True)
             embeddings2 = sts_model.encode(batch_hypos, convert_to_tensor=True)
-            #
+
             # # Compute cosine-similarities
             cosine_scores = util.cos_sim(embeddings1, embeddings2)
-
-
 
             batch_probs = torch.nn.functional.softmax(model_outputs["logits"], dim=-1)
             batch_evids = batch_probs[:, self.entailment_idx].tolist()
