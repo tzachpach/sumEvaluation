@@ -2,6 +2,8 @@ from sentence_transformers import SentenceTransformer, util
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import nltk, numpy as np, torch, os, json
 from summac.utils_misc import batcher
+from blanc import BlancHelp
+
 nltk.download('punkt')
 
 model_map = {
@@ -13,6 +15,7 @@ model_map = {
     "vitc-base": {"model_card": "tals/albert-base-vitaminc-mnli", "entailment_idx": 0, "contradiction_idx": 1},
     "vitc": {"model_card": "tals/albert-xlarge-vitaminc-mnli", "entailment_idx": 0, "contradiction_idx": 1},
     "vitc-only": {"model_card": "tals/albert-xlarge-vitaminc", "entailment_idx": 0, "contradiction_idx": 1},
+    "bart-mnli": {"model_card": "facebook/bart-large-mnli", "entailment_idx": 2, "contradiction_idx": 0}
     # "decomp": 0,
 }
 
@@ -156,14 +159,17 @@ class SummaCImager:
         for pair_idx, (ori, gen) in enumerate(zip(todo_originals, todo_generateds)):
             dataset, N_ori, N_gen = self.build_chunk_dataset(ori, gen, pair_idx=pair_idx)
             if len(dataset) == 0:
-                image = np.zeros((3, 1, 1))
+                image = np.zeros((5, 1, 1))
             else:
-                image = np.zeros((3, N_ori, N_gen))
+                image = np.zeros((5, N_ori, N_gen))
             todo_images.append(image)
             total_dataset += dataset
         if len(total_dataset) > 0 and self.model is None: # Can't just rely on the cache
             self.load_nli()
-        
+
+        sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cuda:1')
+        blanc_model = BlancHelp(device='cuda:1', inference_batch_size=128)
+
         for batch in batcher(total_dataset, batch_size=batch_size):
             batch_prems = [b["premise"] for b in batch]
             batch_hypos = [b["hypothesis"] for b in batch]
@@ -174,26 +180,30 @@ class SummaCImager:
 
             # get Sentence-BERT embeddings for sentence pairs
             # batch_embeddings = self.model.encode(batch_prems, batch_hypos, convert_to_tensor=True, show_progress_bar=False)
-            sts_model = SentenceTransformer('distilbert-base-uncased')
             embeddings1 = sts_model.encode(batch_prems, convert_to_tensor=True)
             embeddings2 = sts_model.encode(batch_hypos, convert_to_tensor=True)
-
-            # Compute cosine-similarities
+            #
+            # # Compute cosine-similarities
             cosine_scores = util.cos_sim(embeddings1, embeddings2)
+
+
 
             batch_probs = torch.nn.functional.softmax(model_outputs["logits"], dim=-1)
             batch_evids = batch_probs[:, self.entailment_idx].tolist()
             batch_conts = batch_probs[:, self.contradiction_idx].tolist()
             batch_neuts = batch_probs[:, self.neutral_idx].tolist()
             batch_sts_score = cosine_scores.tolist()[0]
+            batch_blanc_score = blanc_model.eval_pairs(batch_prems, batch_hypos)
 
-            for b, evid, cont, neut, sts in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score):
+            for b, evid, cont, neut, sts, blnc in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score, batch_blanc_score):
+            # for b, evid, cont, neut, sts in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score):
+            # for b, evid, cont, neut in zip(batch, batch_evids, batch_conts, batch_neuts):
                 image = todo_images[b["pair_idx"]]
-                if evid > 0.7:
-                    evid = (evid + sts) / 2
                 image[0, b["doc_i"], b["gen_i"]] = evid
                 image[1, b["doc_i"], b["gen_i"]] = cont
                 image[2, b["doc_i"], b["gen_i"]] = neut
+                image[3, b["doc_i"], b["gen_i"]] = sts
+                image[4, b["doc_i"], b["gen_i"]] = blnc
 
         for pair_idx, (ori, gen) in enumerate(zip(todo_originals, todo_generateds)):
             cache_key = (ori, gen)
@@ -346,7 +356,7 @@ class SummaCConv(torch.nn.Module):
 
 
 class SummaCZS:
-    def __init__(self, model_name="mnli", granularity="paragraph", op1="max", op2="mean", use_ent=True, use_con=True, imager_load_cache=True, device="cuda", **kwargs):
+    def __init__(self, model_name="mnli", granularity="paragraph", op1="max", op2="mean", use_ent=True, use_con=True, use_sts=True, imager_load_cache=True, device="cuda", **kwargs):
         assert op2 in ["min", "mean", "max"], "Unrecognized `op2`"
         assert op1 in ["max", "mean", "min"], "Unrecognized `op1`"
         self.device = device
@@ -357,6 +367,7 @@ class SummaCZS:
         self.op1 = op1
         self.use_ent = use_ent
         self.use_con = use_con
+        self.use_sts = use_sts
 
     def save_imager_cache(self):
         self.imager.save_cache()
@@ -369,19 +380,30 @@ class SummaCZS:
     def image2score(self, image):
         ent_scores = np.max(image[0], axis=0)
         co_scores = np.max(image[1], axis=0)
+        sts_scores = np.max(image[3], axis=0)
+        blanc_scores = np.max(image[4], axis=0)
         if self.op1 == "mean":
             ent_scores = np.mean(image[0], axis=0)
             co_scores = np.mean(image[1], axis=0)
+            sts_scores = np.mean(image[3], axis=0)
+            blanc_scores = np.mean(image[4], axis=0)
         elif self.op1 == "min":
             ent_scores = np.min(image[0], axis=0)
             co_scores = np.min(image[1], axis=0)
-
-        if self.use_ent and self.use_con:
+            sts_scores = np.min(image[3], axis=0)
+            blanc_scores = np.min(image[4], axis=0)
+        if self.use_ent and self.use_con and self.use_sts:
+            scores = ent_scores - co_scores + sts_scores + blanc_scores
+        elif self.use_ent and self.use_con:
             scores = ent_scores - co_scores
+        elif self.use_ent and self.use_sts:
+            scores = ent_scores + sts_scores + blanc_scores
         elif self.use_ent:
             scores = ent_scores
         elif self.use_con:
             scores = 1.0 - co_scores
+        elif self.use_sts:
+            scores = sts_scores + blanc_scores
 
         final_score = np.mean(scores)
         if self.op2 == "min":
