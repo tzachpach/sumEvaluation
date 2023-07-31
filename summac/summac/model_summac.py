@@ -56,14 +56,16 @@ class SummaCImager:
         self.max_input_length = 500
         self.device = device
         self.cache = {}
-        self.model = None # Lazy loader
+        self.nli_model = None # Lazy loader
+        self.sts_model = None
+        self.mlm_model = None
 
     def load_nli(self):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_card)
-        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_card).eval()
-        self.model.to(self.device)
+        self.nli_model = AutoModelForSequenceClassification.from_pretrained(self.model_card).eval()
+        self.nli_model.to(self.device)
         if self.device == "cuda":
-            self.model.half()
+            self.nli_model.half()
 
     def split_sentences(self, text):
         sentences = nltk.tokenize.sent_tokenize(text)
@@ -122,18 +124,19 @@ class SummaCImager:
 
         image = np.zeros((5, N_ori, N_gen))
 
-        if self.model is None:
+        if self.nli_model is None:
             self.load_nli()
-
-        sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cuda:1')
-        blanc_model = BlancHelp(device='cuda:1', inference_batch_size=128)
+        if self.sts_model is None:
+            self.sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=self.device)
+        if self.mlm_model is None:
+            self.mlm_model = BlancHelp(device=self.device, inference_batch_size=128, show_progress_bar=False)
 
         for batch in batcher(dataset, batch_size=20):
             batch_prems = [b["premise"] for b in batch]
             batch_hypos = [b["hypothesis"] for b in batch]
             batch_tokens = self.tokenizer.batch_encode_plus(list(zip(batch_prems, batch_hypos)), padding=True, truncation=True, max_length=self.max_input_length, return_tensors="pt", truncation_strategy="only_first")
             with torch.no_grad():
-                model_outputs = self.model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
+                model_outputs = self.nli_model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
 
             # get Sentence-BERT embeddings for sentence pairs
             embeddings1 = sts_model.encode(batch_prems, convert_to_tensor=True)
@@ -147,7 +150,7 @@ class SummaCImager:
             batch_conts = batch_probs[:, self.contradiction_idx].tolist()
             batch_neuts = batch_probs[:, self.neutral_idx].tolist()
             batch_sts_score = cosine_scores.tolist()[0]
-            batch_blanc_score = blanc_model.eval_pairs(batch_prems, batch_hypos)
+            batch_blanc_score = self.mlm_model.eval_pairs(batch_prems, batch_hypos)
 
             for b, evid, cont, neut, sts, blnc in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score,
                                                       batch_blanc_score):
@@ -181,18 +184,20 @@ class SummaCImager:
                 image = np.zeros((5, N_ori, N_gen))
             todo_images.append(image)
             total_dataset += dataset
-        if len(total_dataset) > 0 and self.model is None: # Can't just rely on the cache
+        if len(total_dataset) > 0 and self.nli_model is None: # Can't just rely on the cache
             self.load_nli()
 
-        sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cuda:1')
-        blanc_model = BlancHelp(device='cuda:1', inference_batch_size=128)
+        if self.sts_model is None:
+            self.sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=self.device)
+        if self.mlm_model is None:
+            self.mlm_model = BlancHelp(device=self.device, inference_batch_size=128, show_progress_bar=False)
 
         for batch in batcher(total_dataset, batch_size=batch_size):
             batch_prems = [b["premise"] for b in batch]
             batch_hypos = [b["hypothesis"] for b in batch]
             batch_tokens = self.tokenizer.batch_encode_plus(list(zip(batch_prems, batch_hypos)), padding=True, truncation=True, max_length=self.max_input_length, return_tensors="pt", truncation_strategy="only_first")
             with torch.no_grad():
-                model_outputs = self.model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
+                model_outputs = self.nli_model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
 
 
             # get Sentence-BERT embeddings for sentence pairs

@@ -80,7 +80,7 @@ def train(model="mnli", granularity="sentence", nli_labels="e", pre_file="", num
     for epi in range(num_epochs):
         ite = enumerate(dl_train)
         if not silent:
-            ite = tqdm.tqdm(ite, total=len(dl_train))
+            ite = tqdm(ite, total=len(dl_train))
         for ib, batch in ite:
             if precomputed:
                 documents, claims, images, batch_labels = batch

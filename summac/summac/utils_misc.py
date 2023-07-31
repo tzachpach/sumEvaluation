@@ -1,6 +1,6 @@
 import numpy as np
 import requests
-import tqdm
+from tqdm.auto import tqdm
 import os
 
 # GPU-related business
@@ -20,7 +20,7 @@ def select_freer_gpu():
 
 def batcher(iterator, batch_size=4, progress=False):
     if progress:
-        iterator = tqdm.tqdm(iterator)
+        iterator = tqdm(iterator)
 
     batch = []
     for elem in iterator:
