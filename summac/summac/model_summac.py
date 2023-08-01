@@ -34,19 +34,21 @@ def get_neutral_idx(ent_idx, con_idx):
     return list(set([0, 1, 2]) - set([ent_idx, con_idx]))[0]
 
 class SummaCImager:
-    def __init__(self, model_name="mnli", granularity="paragraph", use_cache=True, max_doc_sents=100, device="cuda", **kwargs):
+    def __init__(self, model_type, model_name="vitc", granularity="paragraph", use_cache=True, max_doc_sents=100, device="cuda", **kwargs):
 
         self.grans = granularity.split("-")
 
         assert all(gran in ["paragraph", "sentence", "document", "2sents", "mixed"] for gran in self.grans) and len(self.grans) <= 2, "Unrecognized `granularity` %s" % (granularity)
-        assert model_name in model_map.keys(), "Unrecognized model name: `%s`" % (model_name)
+        # assert model_name in model_map.keys(), "Unrecognized model name: `%s`" % (model_name)
 
-        self.model_name = model_name
-        if model_name != "decomp":
-            self.model_card = name_to_card(model_name)
-            self.entailment_idx = model_map[model_name]["entailment_idx"]
-            self.contradiction_idx = model_map[model_name]["contradiction_idx"]
-            self.neutral_idx = get_neutral_idx(self.entailment_idx, self.contradiction_idx)
+        self.model_type = model_type
+        if model_type == "nli":
+            self.model_name = model_name
+            if model_name != "decomp":
+                self.model_card = name_to_card(model_name)
+                self.entailment_idx = model_map[model_name]["entailment_idx"]
+                self.contradiction_idx = model_map[model_name]["contradiction_idx"]
+                self.neutral_idx = get_neutral_idx(self.entailment_idx, self.contradiction_idx)
 
         self.granularity = granularity
         self.use_cache = use_cache
@@ -56,16 +58,20 @@ class SummaCImager:
         self.max_input_length = 500
         self.device = device
         self.cache = {}
-        self.nli_model = None # Lazy loader
-        self.sts_model = None
-        self.mlm_model = None
+        self.model = None
 
     def load_nli(self):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_card)
-        self.nli_model = AutoModelForSequenceClassification.from_pretrained(self.model_card).eval()
-        self.nli_model.to(self.device)
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_card).eval()
+        self.model.to(self.device)
         if self.device == "cuda":
-            self.nli_model.half()
+            self.model.half()
+
+    def load_sts(self):
+        self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=self.device)
+
+    def load_mlm(self, batch_size):
+        self.model = BlancHelp(device=self.device, inference_batch_size=batch_size, show_progress_bar=False)
 
     def split_sentences(self, text):
         sentences = nltk.tokenize.sent_tokenize(text)
@@ -139,8 +145,8 @@ class SummaCImager:
                 model_outputs = self.nli_model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
 
             # get Sentence-BERT embeddings for sentence pairs
-            embeddings1 = sts_model.encode(batch_prems, convert_to_tensor=True)
-            embeddings2 = sts_model.encode(batch_hypos, convert_to_tensor=True)
+            embeddings1 = self.sts_model.encode(batch_prems, convert_to_tensor=True)
+            embeddings2 = self.sts_model.encode(batch_hypos, convert_to_tensor=True)
 
             # # Compute cosine-similarities
             cosine_scores = util.cos_sim(embeddings1, embeddings2)
@@ -150,17 +156,17 @@ class SummaCImager:
             batch_conts = batch_probs[:, self.contradiction_idx].tolist()
             batch_neuts = batch_probs[:, self.neutral_idx].tolist()
             batch_sts_score = cosine_scores.tolist()[0]
-            batch_blanc_score = self.mlm_model.eval_pairs(batch_prems, batch_hypos)
+            batch_mlm_score = self.mlm_model.eval_pairs(batch_prems, batch_hypos)
 
-            for b, evid, cont, neut, sts, blnc in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score,
-                                                      batch_blanc_score):
+            for b, evid, cont, neut, sts, mlm in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score,
+                                                      batch_mlm_score):
                 # for b, evid, cont, neut, sts in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score):
                 # for b, evid, cont, neut in zip(batch, batch_evids, batch_conts, batch_neuts):
                 image[0, b["doc_i"], b["gen_i"]] = evid
                 image[1, b["doc_i"], b["gen_i"]] = cont
                 image[2, b["doc_i"], b["gen_i"]] = neut
                 image[3, b["doc_i"], b["gen_i"]] = sts
-                image[4, b["doc_i"], b["gen_i"]] = blnc
+                image[4, b["doc_i"], b["gen_i"]] = mlm
 
         if self.use_cache:
             self.cache[cache_key] = image
@@ -178,51 +184,64 @@ class SummaCImager:
         todo_images = []
         for pair_idx, (ori, gen) in enumerate(zip(todo_originals, todo_generateds)):
             dataset, N_ori, N_gen = self.build_chunk_dataset(ori, gen, pair_idx=pair_idx)
-            if len(dataset) == 0:
-                image = np.zeros((5, 1, 1))
+            if self.model_type == 'nli':
+                n = 3
             else:
-                image = np.zeros((5, N_ori, N_gen))
+                n = 1
+
+            if len(dataset) == 0:
+                image = np.zeros((n, 1, 1))
+            else:
+                image = np.zeros((n, N_ori, N_gen))
             todo_images.append(image)
             total_dataset += dataset
-        if len(total_dataset) > 0 and self.nli_model is None: # Can't just rely on the cache
-            self.load_nli()
 
-        if self.sts_model is None:
-            self.sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=self.device)
-        if self.mlm_model is None:
-            self.mlm_model = BlancHelp(device=self.device, inference_batch_size=128, show_progress_bar=False)
+        if len(total_dataset) > 0 and self.model is None: # Can't just rely on the cache
+            if self.model_type == 'nli':
+                self.load_nli()
+            elif self.model_type == 'sts':
+                self.load_sts()
+            elif self.model_type == 'mlm':
+                self.load_mlm(batch_size)
 
         for batch in batcher(total_dataset, batch_size=batch_size):
             batch_prems = [b["premise"] for b in batch]
             batch_hypos = [b["hypothesis"] for b in batch]
-            batch_tokens = self.tokenizer.batch_encode_plus(list(zip(batch_prems, batch_hypos)), padding=True, truncation=True, max_length=self.max_input_length, return_tensors="pt", truncation_strategy="only_first")
-            with torch.no_grad():
-                model_outputs = self.nli_model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
 
+            if self.model_type == 'nli':
+                batch_tokens = self.tokenizer.batch_encode_plus(list(zip(batch_prems, batch_hypos)), padding=True, truncation=True, max_length=self.max_input_length, return_tensors="pt", truncation_strategy="only_first")
+                with torch.no_grad():
+                    model_outputs = self.model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
+                batch_probs = torch.nn.functional.softmax(model_outputs["logits"], dim=-1)
+                batch_evids = batch_probs[:, self.entailment_idx].tolist()
+                batch_conts = batch_probs[:, self.contradiction_idx].tolist()
+                batch_neuts = batch_probs[:, self.neutral_idx].tolist()
+                zipped = zip(batch, batch_evids, batch_conts, batch_neuts)
 
-            # get Sentence-BERT embeddings for sentence pairs
-            embeddings1 = sts_model.encode(batch_prems, convert_to_tensor=True)
-            embeddings2 = sts_model.encode(batch_hypos, convert_to_tensor=True)
+            elif self.model_type == 'sts':
+                # Get text embeddings for text pairs
+                embeddings1 = self.model.encode(batch_prems, convert_to_tensor=True)
+                embeddings2 = self.model.encode(batch_hypos, convert_to_tensor=True)
 
-            # # Compute cosine-similarities
-            cosine_scores = util.cos_sim(embeddings1, embeddings2)
+                # Compute cosine-similarities
+                cosine_scores = util.cos_sim(embeddings1, embeddings2)
+                batch_sts_score = cosine_scores.tolist()[0]
+                zipped = zip(batch, batch_sts_score)
 
-            batch_probs = torch.nn.functional.softmax(model_outputs["logits"], dim=-1)
-            batch_evids = batch_probs[:, self.entailment_idx].tolist()
-            batch_conts = batch_probs[:, self.contradiction_idx].tolist()
-            batch_neuts = batch_probs[:, self.neutral_idx].tolist()
-            batch_sts_score = cosine_scores.tolist()[0]
-            batch_blanc_score = blanc_model.eval_pairs(batch_prems, batch_hypos)
+            elif self.model_type == 'mlm':
+                batch_mlm_score = self.model.eval_pairs(batch_prems, batch_hypos)
+                zipped = zip(batch, batch_mlm_score)
 
-            for b, evid, cont, neut, sts, blnc in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score, batch_blanc_score):
-            # for b, evid, cont, neut, sts in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score):
-            # for b, evid, cont, neut in zip(batch, batch_evids, batch_conts, batch_neuts):
+            for z in zipped:
+                b = z[0]
                 image = todo_images[b["pair_idx"]]
-                image[0, b["doc_i"], b["gen_i"]] = evid
-                image[1, b["doc_i"], b["gen_i"]] = cont
-                image[2, b["doc_i"], b["gen_i"]] = neut
-                image[3, b["doc_i"], b["gen_i"]] = sts
-                image[4, b["doc_i"], b["gen_i"]] = blnc
+
+                if self.model_type == 'nli':
+                    image[0, b["doc_i"], b["gen_i"]] = z[1]
+                    image[1, b["doc_i"], b["gen_i"]] = z[2]
+                    image[2, b["doc_i"], b["gen_i"]] = z[3]
+                else:
+                    image[0, b["doc_i"], b["gen_i"]] = z[1]
 
         for pair_idx, (ori, gen) in enumerate(zip(todo_originals, todo_generateds)):
             cache_key = (ori, gen)
@@ -248,7 +267,7 @@ class SummaCImager:
                 self.cache = {tuple(k.split("[///]")): np.array(v) for k, v in cache_cp.items()}
 
 class SummaCConv(torch.nn.Module):
-    def __init__(self, models=["mnli", "anli", "vitc"], bins='even50', granularity="sentence", nli_labels="e", device="cuda", start_file=None, imager_load_cache=True, agg="mean", **kwargs):
+    def __init__(self, models=["mnli", "anli", "vitc"], bins='even50', granularity="sentence", nli_labels="e", device="cuda", start_file=None, imager_load_cache=True, agg="mean", use_sts=True, **kwargs):
         # `bins` should be `even%d` or `percentiles`
         assert nli_labels in ["e", "c", "n", "ec", "en", "cn", "ecn"], "Unrecognized nli_labels argument %s" % (nli_labels)
 
@@ -274,13 +293,15 @@ class SummaCConv(torch.nn.Module):
         self.n_bins = len(self.bins) - 1
         self.n_rows = 10
         self.n_labels = 2
-        self.n_depth = len(self.imagers)*len(self.nli_labels)
+        self.n_depth = len(self.imagers)*(len(self.nli_labels) if not use_sts else len(self.nli_labels) + 2)
         self.full_size = self.n_depth*self.n_bins
 
         self.agg = agg
 
         self.mlp = torch.nn.Linear(self.full_size, 1).to(device)
-        self.layer_final = torch.nn.Linear(3, self.n_labels).to(device)
+        self.layer_final = torch.nn.Linear(3 if not use_sts else 5, self.n_labels).to(device)
+
+        self.use_sts = use_sts
 
         if start_file == "default":
             start_file = "summac_conv_vitc_sent_perc_e.bin"
@@ -375,66 +396,75 @@ class SummaCConv(torch.nn.Module):
 
 
 class SummaCZS:
-    def __init__(self, model_name="mnli", granularity="paragraph", op1="max", op2="mean", use_ent=True, use_con=True, use_sts=True, imager_load_cache=True, device="cuda", **kwargs):
+    def __init__(self, model_name="vitc", nli_granularity="sentence", sts_granularity="paragraph", mlm_granularity="document", op1="max", op2="mean", use_nli=True, use_ent=True, use_con=False, use_sts=False, use_mlm=False, imager_load_cache=True, device="cuda", **kwargs):
         assert op2 in ["min", "mean", "max"], "Unrecognized `op2`"
         assert op1 in ["max", "mean", "min"], "Unrecognized `op1`"
         self.device = device
-        self.imager = SummaCImager(model_name=model_name, granularity=granularity, device=self.device, **kwargs)
-        if imager_load_cache:
-            self.imager.load_cache()
+
         self.op2 = op2
         self.op1 = op1
         self.use_ent = use_ent
         self.use_con = use_con
-        self.use_sts = use_sts
 
+        self.use_nli = use_nli
+        self.use_sts = use_sts
+        self.use_mlm = use_mlm
+
+        if self.use_nli:
+            self.nli_imager = SummaCImager("nli", model_name=model_name, granularity=nli_granularity, device=self.device, **kwargs)
+        if self.use_sts:
+            self.sts_imager = SummaCImager("sts", granularity=sts_granularity, device=self.device, **kwargs)
+        if self.use_mlm:
+            self.mlm_imager = SummaCImager("mlm", granularity=mlm_granularity, device=self.device, **kwargs)
     def save_imager_cache(self):
-        self.imager.save_cache()
+        self.nli_imager.save_cache()
 
     def score_one(self, original, generated):
-        image = self.imager.build_image(original, generated)
+        image = self.nli_imager.build_image(original, generated)
         score = self.image2score(image)
         return {"image": image, "score": score}
 
-    def image2score(self, image):
-        ent_scores = np.max(image[0], axis=0)
-        co_scores = np.max(image[1], axis=0)
-        sts_scores = np.max(image[3], axis=0)
-        blanc_scores = np.max(image[4], axis=0)
-        if self.op1 == "mean":
-            ent_scores = np.mean(image[0], axis=0)
-            co_scores = np.mean(image[1], axis=0)
-            sts_scores = np.mean(image[3], axis=0)
-            blanc_scores = np.mean(image[4], axis=0)
-        elif self.op1 == "min":
-            ent_scores = np.min(image[0], axis=0)
-            co_scores = np.min(image[1], axis=0)
-            sts_scores = np.min(image[3], axis=0)
-            blanc_scores = np.min(image[4], axis=0)
-        if self.use_ent and self.use_con and self.use_sts:
-            scores = ent_scores - co_scores + sts_scores + blanc_scores
-        elif self.use_ent and self.use_con:
-            scores = ent_scores - co_scores
-        elif self.use_ent and self.use_sts:
-            scores = ent_scores + sts_scores + blanc_scores
-        elif self.use_ent:
-            scores = ent_scores
-        elif self.use_con:
-            scores = 1.0 - co_scores
-        elif self.use_sts:
-            scores = sts_scores + blanc_scores
+    def image2score(self, image, model_type):
+        scores = []
+        for val in image:
+            if self.op1 == "max":
+                scores.append(np.max(val, axis=0))
+            elif self.op1 == "mean":
+                scores.append(np.mean(val, axis=0))
+            elif self.op1 == "min":
+                scores.append(np.min(val, axis=0))
 
-        final_score = np.mean(scores)
-        if self.op2 == "min":
+        if model_type == 'nli':
+            if self.use_ent and self.use_con:
+                scores = scores[0] - scores[1]
+            elif self.use_ent:
+                scores = scores[0]
+            elif self.use_con:
+                scores = 1 - scores[1]
+        else:
+            scores = scores[0]
+
+        if self.op2 == "mean":
+            final_score = np.mean(scores)
+        elif self.op2 == "min":
             final_score = np.min(scores)
         elif self.op2 == "max":
             final_score = np.max(scores)
         return final_score
 
     def score(self, sources, generateds, batch_size=128, **kwargs):
-        images = self.imager.build_images(sources, generateds, batch_size=batch_size)
-        scores = [self.image2score(image) for image in images]
-        return {"scores": scores, "images": images}
+        scores = np.zeros(len(sources))
+        if self.use_nli:
+            nli_images = self.nli_imager.build_images(sources, generateds, batch_size=batch_size)
+            scores += np.array([self.image2score(image, 'nli') for image in nli_images])
+        if self.use_sts:
+            sts_images = self.sts_imager.build_images(sources, generateds, batch_size=batch_size)
+            scores += np.array([self.image2score(image, 'sts') for image in sts_images])
+        if self.use_mlm:
+            mlm_images = self.mlm_imager.build_images(sources, generateds, batch_size=batch_size)
+            scores += np.array([self.image2score(image, 'mlm') for image in mlm_images])
+
+        return {"scores": scores} #, "images": images}
 
 
 if __name__ == "__main__":
@@ -450,7 +480,7 @@ if __name__ == "__main__":
     summary = "Jeff joined Microsoft in 1992 to lead the company's corporate evangelism. He then served as a Group Manager in Microsoft's Internet Business Unit. In 1998, Jeff led Sharepoint Portal Server, which became the company's fastest-growing business, surpassing $3 million in revenue. Jeff next leads corporate strategy for SharePoint and Servers which is the basis of Microsoft's cloud-first strategy. He leads corporate strategy for Satya Nadella and Amy Hood on Microsoft's mobile-first."
 
     scores = model.score([document], [summary])["images"][0][0].T
-    summary_sentences = model.imager.split_text(summary)
+    summary_sentences = model.nli_imager.split_text(summary)
 
     print(np.array2string(scores, precision=2))
     for score_row, sentence in zip(scores, summary_sentences):
