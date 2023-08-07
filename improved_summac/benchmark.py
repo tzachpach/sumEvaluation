@@ -392,7 +392,7 @@ class SummaCBenchmark:
 
 if __name__ == "__main__":
     import random
-    path = r'./data'
+    path = r'data'
     for cut in ["val", "test"]:
         summac_benchmark = SummaCBenchmark(benchmark_folder=path, cut=cut)
         print("============= SUMMAC %s ===============" % (cut.upper()))

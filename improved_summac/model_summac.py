@@ -1,7 +1,7 @@
 from sentence_transformers import SentenceTransformer, util
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import nltk, numpy as np, torch, os, json
-from summac.utils_misc import batcher
+from improved_summac.utils_misc import batcher
 from blanc import BlancHelp
 
 nltk.download('punkt')
