@@ -19,19 +19,23 @@ model_map = {
     # "decomp": 0,
 }
 
+
 def card_to_name(card):
     card2name = {v["model_card"]: k for k, v in model_map.items()}
     if card in card2name:
         return card2name[card]
     return card
 
+
 def name_to_card(name):
     if name in model_map:
         return model_map[name]["model_card"]
     return name
 
+
 def get_neutral_idx(ent_idx, con_idx):
     return list(set([0, 1, 2]) - set([ent_idx, con_idx]))[0]
+
 
 class SummaCImager:
     def __init__(self, model_type, model_name="vitc", granularity="paragraph", use_cache=True, max_doc_sents=100, device="cuda", **kwargs):
@@ -116,62 +120,6 @@ class SummaCImager:
         dataset = [{"premise": original_chunks[i], "hypothesis": generated_chunks[j], "doc_i": i, "gen_i": j, "pair_idx": pair_idx} for i in range(N_ori) for j in range(N_gen)]
         return dataset, N_ori, N_gen
 
-    def build_image(self, original, generated):
-        cache_key = (original, generated)
-        if self.use_cache and cache_key in self.cache:
-            cached_image = self.cache[cache_key]
-            cached_image = cached_image[:, :self.max_doc_sents, :]
-            return cached_image
-
-        dataset, N_ori, N_gen = self.build_chunk_dataset(original, generated)
-        
-        if len(dataset) == 0:
-            return np.zeros((5, 1, 1))
-
-        image = np.zeros((5, N_ori, N_gen))
-
-        if self.nli_model is None:
-            self.load_nli()
-        if self.sts_model is None:
-            self.sts_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=self.device)
-        if self.mlm_model is None:
-            self.mlm_model = BlancHelp(device=self.device, inference_batch_size=128, show_progress_bar=False)
-
-        for batch in batcher(dataset, batch_size=20):
-            batch_prems = [b["premise"] for b in batch]
-            batch_hypos = [b["hypothesis"] for b in batch]
-            batch_tokens = self.tokenizer.batch_encode_plus(list(zip(batch_prems, batch_hypos)), padding=True, truncation=True, max_length=self.max_input_length, return_tensors="pt", truncation_strategy="only_first")
-            with torch.no_grad():
-                model_outputs = self.nli_model(**{k: v.to(self.device) for k, v in batch_tokens.items()})
-
-            # get Sentence-BERT embeddings for sentence pairs
-            embeddings1 = self.sts_model.encode(batch_prems, convert_to_tensor=True)
-            embeddings2 = self.sts_model.encode(batch_hypos, convert_to_tensor=True)
-
-            # # Compute cosine-similarities
-            cosine_scores = util.cos_sim(embeddings1, embeddings2)
-
-            batch_probs = torch.nn.functional.softmax(model_outputs["logits"], dim=-1)
-            batch_evids = batch_probs[:, self.entailment_idx].tolist()
-            batch_conts = batch_probs[:, self.contradiction_idx].tolist()
-            batch_neuts = batch_probs[:, self.neutral_idx].tolist()
-            batch_sts_score = cosine_scores.tolist()[0]
-            batch_mlm_score = self.mlm_model.eval_pairs(batch_prems, batch_hypos)
-
-            for b, evid, cont, neut, sts, mlm in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score,
-                                                      batch_mlm_score):
-                # for b, evid, cont, neut, sts in zip(batch, batch_evids, batch_conts, batch_neuts, batch_sts_score):
-                # for b, evid, cont, neut in zip(batch, batch_evids, batch_conts, batch_neuts):
-                image[0, b["doc_i"], b["gen_i"]] = evid
-                image[1, b["doc_i"], b["gen_i"]] = cont
-                image[2, b["doc_i"], b["gen_i"]] = neut
-                image[3, b["doc_i"], b["gen_i"]] = sts
-                image[4, b["doc_i"], b["gen_i"]] = mlm
-
-        if self.use_cache:
-            self.cache[cache_key] = image
-        return image
-
     def build_images(self, originals, generateds, batch_size=128):
         todo_originals, todo_generateds = [], []
         for ori, gen in zip(originals, generateds):
@@ -250,8 +198,9 @@ class SummaCImager:
         images = [self.cache[(ori, gen)] for ori, gen in zip(originals, generateds)]
         return images
 
-
     def get_cache_file(self):
+        if not os.path.exists(self.cache_folder):
+            os.makedirs(self.cache_folder)
         return os.path.join(self.cache_folder, "cache_%s_%s.json" % (self.model_name, self.granularity))
 
     def save_cache(self):
@@ -265,134 +214,6 @@ class SummaCImager:
             with open(cache_file, "r") as f:
                 cache_cp = json.load(f)
                 self.cache = {tuple(k.split("[///]")): np.array(v) for k, v in cache_cp.items()}
-
-class SummaCConv(torch.nn.Module):
-    def __init__(self, models=["mnli", "anli", "vitc"], bins='even50', granularity="sentence", nli_labels="e", device="cuda", start_file=None, imager_load_cache=True, agg="mean", use_sts=True, **kwargs):
-        # `bins` should be `even%d` or `percentiles`
-        assert nli_labels in ["e", "c", "n", "ec", "en", "cn", "ecn"], "Unrecognized nli_labels argument %s" % (nli_labels)
-
-        super(SummaCConv, self).__init__()
-        self.device = device
-        self.models = models
-
-        self.imagers = []
-        for model_name in models:
-            self.imagers.append(SummaCImager(model_name=model_name, granularity=granularity, device=self.device, **kwargs))
-        if imager_load_cache:
-            for imager in self.imagers:
-                imager.load_cache()
-        assert len(self.imagers)>0, "Imager names were empty or unrecognized"
-
-        if "even" in bins:
-            n_bins = int(bins.replace("even", ""))
-            self.bins = list(np.arange(0, 1, 1/n_bins)) + [1.0]
-        elif bins == "percentile":
-            self.bins = [0.0, 0.01, 0.02, 0.03, 0.04, 0.07, 0.13, 0.37, 0.90, 0.91, 0.92, 0.93, 0.94, 0.95, 0.955, 0.96, 0.965, 0.97, 0.975, 0.98, 0.985, 0.99, 0.995, 1.0] # Based on the percentile of the distribution on some large number of summaries
-
-        self.nli_labels = nli_labels
-        self.n_bins = len(self.bins) - 1
-        self.n_rows = 10
-        self.n_labels = 2
-        self.n_depth = len(self.imagers)*(len(self.nli_labels) if not use_sts else len(self.nli_labels) + 2)
-        self.full_size = self.n_depth*self.n_bins
-
-        self.agg = agg
-
-        self.mlp = torch.nn.Linear(self.full_size, 1).to(device)
-        self.layer_final = torch.nn.Linear(3 if not use_sts else 5, self.n_labels).to(device)
-
-        self.use_sts = use_sts
-
-        if start_file == "default":
-            start_file = "summac_conv_vitc_sent_perc_e.bin"
-            if not os.path.isfile("summac_conv_vitc_sent_perc_e.bin"):
-                os.system("wget https://github.com/tingofurro/summac/raw/master/summac_conv_vitc_sent_perc_e.bin")
-                assert bins == "percentile", "bins mode should be set to percentile if using the default 1-d convolution weights."
-        if start_file is not None:
-            print(self.load_state_dict(torch.load(start_file)))
-
-    def build_image(self, original, generated):
-        images = [imager.build_image(original, generated) for imager in self.imagers]
-        image = np.concatenate(images, axis=0)
-        return image
-
-    def compute_histogram(self, original=None, generated=None, image=None):
-        # Takes the two texts, and generates a (n_rows, 2*n_bins)
-
-        if image is None:
-            image = self.build_image(original, generated)
-
-        N_depth, N_ori, N_gen = image.shape
-
-        full_histogram = []
-        for i_gen in range(N_gen):
-            histos = []
-
-            for i_depth in range(N_depth):
-                if (i_depth % 3 == 0 and "e" in self.nli_labels) or (i_depth % 3 == 1 and "c" in self.nli_labels) or (i_depth % 3 == 2 and "n" in self.nli_labels):
-                    histo, X = np.histogram(image[i_depth, :, i_gen], range=(0, 1), bins=self.bins, density=False)
-                    histos.append(histo)
-
-            histogram_row = np.concatenate(histos)
-            full_histogram.append(histogram_row)
-
-        n_rows_missing = self.n_rows - len(full_histogram)
-        full_histogram += [[0.0] * self.full_size] * n_rows_missing
-        full_histogram = full_histogram[:self.n_rows]
-        full_histogram = np.array(full_histogram)
-        return image, full_histogram
-
-    def forward(self, originals, generateds, images=None):
-        if images is not None:
-            # In case they've been pre-computed.
-            histograms = []
-            for image in images:
-                _, histogram = self.compute_histogram(image=image)
-                histograms.append(histogram)
-        else:
-            images, histograms = [], []
-            for original, generated in zip(originals, generateds):
-                image, histogram = self.compute_histogram(original=original, generated=generated)
-                images.append(image)
-                histograms.append(histogram)
-
-        N = len(histograms)
-        histograms = torch.FloatTensor(histograms).to(self.device)
-
-        non_zeros = (torch.sum(histograms, dim=-1) != 0.0).long()
-        seq_lengths = non_zeros.sum(dim=-1).tolist()
-
-        mlp_outs = self.mlp(histograms).reshape(N, self.n_rows)
-        features = []
-
-        for mlp_out, seq_length in zip(mlp_outs, seq_lengths):
-            if seq_length > 0:
-                Rs = mlp_out[:seq_length]
-                if self.agg == "mean":
-                    features.append(torch.cat([torch.mean(Rs).unsqueeze(0), torch.mean(Rs).unsqueeze(0), torch.mean(Rs).unsqueeze(0)]).unsqueeze(0))
-                elif self.agg == "min":
-                    features.append(torch.cat([torch.min(Rs).unsqueeze(0), torch.min(Rs).unsqueeze(0), torch.min(Rs).unsqueeze(0)]).unsqueeze(0))
-                elif self.agg == "max":
-                    features.append(torch.cat([torch.max(Rs).unsqueeze(0), torch.max(Rs).unsqueeze(0), torch.max(Rs).unsqueeze(0)]).unsqueeze(0))
-                elif self.agg == "all":
-                    features.append(torch.cat([torch.min(Rs).unsqueeze(0), torch.mean(Rs).unsqueeze(0), torch.max(Rs).unsqueeze(0)]).unsqueeze(0))
-            else:
-                features.append(torch.FloatTensor([0.0, 0.0, 0.0]).unsqueeze(0)) # .cuda()
-        features = torch.cat(features)
-        logits = self.layer_final(features)
-        histograms_out = [histogram.cpu().numpy() for histogram in histograms]
-        return logits, histograms_out, images
-
-    def save_imager_cache(self):
-        for imager in self.imagers:
-            imager.save_cache()
-
-    def score(self, originals, generateds, **kwargs):
-        with torch.no_grad():
-            logits, histograms, images = self.forward(originals, generateds)
-            probs = torch.nn.functional.softmax(logits, dim=-1)
-            batch_scores = probs[:, 1].tolist()
-        return {"scores": batch_scores} # , "histograms": histograms, "images": images
 
 
 class SummaCZS:
@@ -416,13 +237,9 @@ class SummaCZS:
             self.sts_imager = SummaCImager("sts", granularity=sts_granularity, device=self.device, **kwargs)
         if self.use_mlm:
             self.mlm_imager = SummaCImager("mlm", granularity=mlm_granularity, device=self.device, **kwargs)
+
     def save_imager_cache(self):
         self.nli_imager.save_cache()
-
-    def score_one(self, original, generated):
-        image = self.nli_imager.build_image(original, generated)
-        score = self.image2score(image)
-        return {"image": image, "score": score}
 
     def image2score(self, image, model_type):
         scores = []
@@ -464,7 +281,7 @@ class SummaCZS:
             mlm_images = self.mlm_imager.build_images(sources, generateds, batch_size=batch_size)
             scores += np.array([self.image2score(image, 'mlm') for image in mlm_images])
 
-        return {"scores": scores} #, "images": images}
+        return {"scores": scores}
 
 
 if __name__ == "__main__":
