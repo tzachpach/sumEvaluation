@@ -2,8 +2,12 @@
 
 In this repository, we present a novel approach to text summarization evaluation, addressing the limitations of traditional metrics and introducing a comprehensive methodology that integrates various techniques for a more accurate assessment.
 
+------------------
+To install improved_summac use
 
-
+'''
+pip install -r requirements.txt
+'''
 ------------------
 We combine three approaches:
 1. NLI - Natural Language Inference 
