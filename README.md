@@ -22,7 +22,16 @@ We rely on the main idea that was shown in the SummaC framework - we propose to 
 ![Ben Gurion NLP](https://github.com/tzachpach/sumEvaluation/assets/58233980/89d7ea14-5a30-4361-a0eb-dabcf5765004)
 
 --------------------
+The datasets we have used are almost the same as were used in SummaC (except for CoGenSumm) and are as follows:
 
-Our results are as follows:
+1. XSumFaith: Curated by Maynez et al. in 2020, is an extension of the XSum dataset, emphasizing the faithfulness of summarization models.
+2. Polytope: Introduced by Huang et al. in 2020, presents a comprehensive typology of summarization errors.
+3. FactCC: Introduced by Kryściński et al. in 2020,  focuses on factual consistency in summaries.
+4. SummEval: Introduced by Fabbri et al. in 2021, comprises summarizer outputs from a variety of models, labeled using a 5-point Likert scale for coherence, consistency, fluency, and relevance.
+5. FRANK: Introduced by Pagnoni et al. in 2021, this dataset annotates summarizers trained on CNN/DM and XSum datasets. 
+
+-------------------
+
+As our datasets are often imbalanced, we used Balanced Accuracy as our main KPI. Our results are as follows:
 
 ![Balanced Accuracy Results](https://i.imgur.com/0JgDXkv.png)
