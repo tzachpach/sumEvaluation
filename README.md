@@ -25,4 +25,4 @@ We rely on the main idea that was shown in the SummaC framework - we propose to 
 
 Our results are as follows:
 
-![Balanced Accuracy Results](https://i.imgur.com/8GLsLbK.png)
+![Balanced Accuracy Results](https://i.imgur.com/0JgDXkv.png)
